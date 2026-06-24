@@ -14,13 +14,11 @@ class PanSou:
         self.server = server
         self.session = requests.Session()
 
-    def search(self, keyword: str, refresh: bool = False, timeout: int = 30) -> list:
+    def search(self, keyword: str, refresh: bool = False) -> list:
         """搜索资源
 
         Args:
             keyword (str): 搜索关键字
-            refresh (bool): 是否深度刷新
-            timeout (int): 请求超时秒数
 
         Returns:
             list: 资源列表
@@ -28,7 +26,7 @@ class PanSou:
         try:
             url = f"{self.server.rstrip('/')}/api/search"
             params = {"kw": keyword, "cloud_types": ["quark"], "res": "merge", "refresh": refresh}
-            response = self.session.get(url, params=params, timeout=timeout)
+            response = self.session.get(url, params=params)
             result = response.json()
             if result.get("code") == 0:
                 data = result.get("data", {}).get("merged_by_type", {}).get("quark", [])
