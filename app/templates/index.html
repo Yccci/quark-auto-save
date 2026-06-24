@@ -337,13 +337,14 @@
                         <div class="dropdown-menu show task-suggestions" v-if="smart_param.showSuggestions && smart_param.taskSuggestions.success && smart_param.index === index">
                           <div class="dropdown-item text-muted text-center" style="font-size:12px;">
                             <span v-if="smart_param.isVerifying" class="mr-1"><i class="spinner-border spinner-border-sm" role="status"></i> 正在检查链接有效性...</span>
-                            <span v-else>{{ smart_param.taskSuggestions.message ? smart_param.taskSuggestions.message : smart_param.taskSuggestions.data.length ? `以下资源来自网络搜索，请自行辨识，如有侵权请联系资源方` : "未搜索到资源" }}</span>
+                            <span v-else>{{ suggestionHintMessage }}</span>
                           </div>
-                          <div v-for="(suggestion, sIndex) in smart_param.taskSuggestions.data" :key="suggestion.shareurl" class="dropdown-item cursor-pointer" @click.prevent="selectSuggestion(index, suggestion)" style="font-size: 12px;" :title="suggestion.content">
-                            <span>{{ suggestion.verify === true ? '✅' : suggestion.verify === false ? '❌' : '❔' }}</span> {{ suggestion.taskname }}
+                          <div v-for="(suggestion, sIndex) in visibleSuggestions" :key="suggestion.shareurl" class="dropdown-item cursor-pointer" @click.prevent="selectSuggestion(index, suggestion)" style="font-size: 12px;" :title="suggestion.content">
+                            <span>✅</span> {{ suggestion.taskname }}
                             <small class="text-muted">
                               <a :href="suggestion.shareurl" target="_blank" @click.stop>{{ suggestion.shareurl }}</a>
                             </small>
+                            <span v-if="suggestion.total_size" class="badge bg-transparent border border-warning text-warning">{{ suggestion.total_size | size }}</span>
                             <span class="badge bg-transparent border border-success text-success">{{ suggestion.source || "网络公开" }}</span>
                             <span class="badge bg-transparent border border-info text-info">{{ suggestion.channel }}</span>
                             <span v-if="suggestion.datetime" class="badge bg-transparent border border-dark text-dark">{{ suggestion.datetime }}</span>
@@ -720,6 +721,27 @@
             this.configModified = true;
           },
           deep: true
+        }
+      },
+      computed: {
+        visibleSuggestions() {
+          const data = (this.smart_param.taskSuggestions && this.smart_param.taskSuggestions.data) || [];
+          const valid = data.filter(item => item.verify === true);
+          return this.sortSuggestionsBySizeAndTime(valid);
+        },
+        suggestionHintMessage() {
+          const suggestions = this.smart_param.taskSuggestions || {};
+          if (suggestions.message) {
+            return suggestions.message;
+          }
+          const data = suggestions.data || [];
+          if (this.visibleSuggestions.length > 0) {
+            return "以下资源来自网络搜索，请自行辨识，如有侵权请联系资源方";
+          }
+          if (data.length > 0 && !this.smart_param.isVerifying) {
+            return "未找到有效资源";
+          }
+          return data.length ? "正在筛选有效资源..." : "未搜索到资源";
         }
       },
       mounted() {
@@ -1123,7 +1145,11 @@
             axios.post('/get_share_detail', { shareurl: item.shareurl })
               .then(res => {
                 if (this.smart_param.isSearching) return;
-                this.$set(item, 'verify', res.data.success);
+                const isValid = res.data.success;
+                this.$set(item, 'verify', isValid);
+                if (isValid) {
+                  this.$set(item, 'total_size', this.calcShareTotalSize(res.data.data));
+                }
               }).catch(() => {
                 if (this.smart_param.isSearching) return;
                 this.$set(item, 'verify', false);
@@ -1137,6 +1163,22 @@
           };
           const running = Math.min(concurrency, data.length);
           for (let i = 0; i < running; i++) next();
+        },
+        calcShareTotalSize(shareData) {
+          const list = (shareData && shareData.list) || [];
+          return list.reduce((sum, file) => sum + (file.dir ? 0 : (file.size || 0)), 0);
+        },
+        sortSuggestionsBySizeAndTime(list) {
+          if (!list || !list.length) {
+            return [];
+          }
+          const bySize = [...list].sort((a, b) => (b.total_size || 0) - (a.total_size || 0));
+          const top3 = bySize.slice(0, 3);
+          const top3Urls = new Set(top3.map(item => item.shareurl));
+          const rest = list
+            .filter(item => !top3Urls.has(item.shareurl))
+            .sort((a, b) => (b.datetime || '').localeCompare(a.datetime || ''));
+          return [...top3, ...rest];
         },
         selectSuggestion(index, suggestion) {
           this.smart_param.showSuggestions = false;
