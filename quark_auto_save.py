@@ -1321,6 +1321,21 @@ def main():
         send_ql_notify("【夸克自动转存】", notify_body)
         print()
     if cookie_form_file:
+        # 写回前合并磁盘上可能新增的任务，避免覆盖并发写入
+        try:
+            latest = Config.read_json(config_path)
+            latest_tasklist = latest.get("tasklist", [])
+            current_tasklist = CONFIG_DATA.get("tasklist", [])
+            if len(latest_tasklist) > len(current_tasklist):
+                merged = {t.get("taskname"): t for t in latest_tasklist}
+                for task in current_tasklist:
+                    merged[task.get("taskname")] = task
+                CONFIG_DATA["tasklist"] = list(merged.values())
+                print(
+                    f"⚙️ 合并磁盘任务列表: {len(latest_tasklist)} -> {len(CONFIG_DATA['tasklist'])}"
+                )
+        except Exception as e:
+            print(f"⚙️ 合并任务列表失败: {e}")
         # 更新配置
         Config.write_json(config_path, CONFIG_DATA)
 

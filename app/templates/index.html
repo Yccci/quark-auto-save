@@ -470,7 +470,7 @@
           </div>
 
           <div class="bottom-buttons">
-            <button class="btn btn-success" data-toggle="tooltip" data-placement="top" title="保存 CTRL+S"><i class="bi bi-floppy2-fill"></i></button>
+            <button type="button" class="btn btn-success" data-toggle="tooltip" data-placement="top" title="保存 CTRL+S" :disabled="!dataLoaded" @click="saveConfig()"><i class="bi bi-floppy2-fill"></i></button>
             <button type="button" class="btn btn-primary" data-toggle="tooltip" data-placement="top" title="运行 CTRL+R" @click="runScriptNow()"><i class="bi bi-play-fill"></i></button>
             <button type="button" class="btn btn-info" data-toggle="tooltip" data-placement="top" title="单击回顶，双击到底" @click="scrollToX(0)" @dblclick="scrollToX()"><i class="bi bi-chevron-bar-up"></i></button>
           </div>
@@ -684,6 +684,7 @@
         },
         activeTab: 'tasklist',
         configModified: false,
+        dataLoaded: false,
         fileSelect: {
           index: null,
           share: {},
@@ -758,9 +759,17 @@
             });
         },
         fetchData() {
+          this.dataLoaded = false;
           axios.get('/data')
             .then(response => {
+              if (!response.data.success) {
+                this.showToast(response.data.message || '加载配置失败', 'error');
+                return;
+              }
               config_data = response.data.data
+              if (!Array.isArray(config_data.tasklist)) {
+                config_data.tasklist = [];
+              }
               // cookie兼容
               if (typeof config_data.cookie === 'string')
                 config_data.cookie = [config_data.cookie];
@@ -801,19 +810,25 @@
                 };
               }
               this.formData = config_data;
+              this.dataLoaded = true;
               setTimeout(() => {
                 this.configModified = false;
               }, 100);
             })
             .catch(error => {
               console.error('Error fetching data:', error);
+              this.showToast('加载配置失败，请刷新页面后重试', 'error');
             });
         },
         handleKeyDown(event) {
           if (event.ctrlKey || event.metaKey) {
             if (event.keyCode === 83 || event.key === 's') {
               event.preventDefault();
-              this.saveConfig();
+              if (this.dataLoaded) {
+                this.saveConfig();
+              } else {
+                this.showToast('配置尚未加载完成，请稍后再保存', 'warning');
+              }
             } else if (event.keyCode === 82 || event.key === 'r') {
               event.preventDefault();
               this.runScriptNow();
@@ -828,6 +843,10 @@
           }
         },
         saveConfig() {
+          if (!this.dataLoaded) {
+            this.showToast('配置尚未加载完成，请稍后再保存', 'warning');
+            return;
+          }
           axios.post('/update', this.formData)
             .then(response => {
               if (response.data.success) {
