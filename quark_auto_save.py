@@ -1108,6 +1108,57 @@ def format_bytes(size_bytes: int) -> str:
     return f"{size_bytes:.2f} {units[i]}"
 
 
+def _to_int_size(value):
+    try:
+        if value is None:
+            return 0
+        return int(float(value))
+    except (ValueError, TypeError):
+        return 0
+
+
+def calc_share_total_size(file_list):
+    """计算分享根目录文件总大小（含文件夹聚合大小）。"""
+    if not isinstance(file_list, list):
+        return 0
+    total = 0
+    for item in file_list:
+        if not isinstance(item, dict):
+            continue
+        total += _to_int_size(item.get("size") or item.get("file_size"))
+    return total
+
+
+def parse_size_from_content(content):
+    """从搜索结果描述中解析大小，如「大小:1.5GB」。"""
+    if not content:
+        return 0
+    match = re.search(r"大小\s*[:：]\s*(-|[^\s,，]+)", str(content), re.IGNORECASE)
+    if not match or match.group(1).strip() == "-":
+        return 0
+    text = match.group(1).strip().upper()
+    unit_map = {
+        "B": 1,
+        "K": 1024,
+        "KB": 1024,
+        "M": 1024**2,
+        "MB": 1024**2,
+        "G": 1024**3,
+        "GB": 1024**3,
+        "T": 1024**4,
+        "TB": 1024**4,
+    }
+    m = re.match(r"^([\d.]+)\s*([A-Z]+)?$", text)
+    if not m:
+        return 0
+    num = float(m.group(1))
+    unit = m.group(2) or "B"
+    multiplier = unit_map.get(unit)
+    if not multiplier:
+        return 0
+    return int(num * multiplier)
+
+
 def do_sign(account):
     if not account.mparam:
         print("⏭️ 移动端参数未设置，跳过签到")

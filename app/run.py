@@ -31,7 +31,7 @@ import re
 
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, parent_dir)
-from quark_auto_save import Quark, Config, MagicRename
+from quark_auto_save import Quark, Config, MagicRename, calc_share_total_size
 
 print(
     r"""
@@ -391,6 +391,21 @@ def get_share_detail():
         for i in share_detail["data"].get("full_path", [])
     ] or paths
     data["stoken"] = stoken
+
+    # 确保文件夹 include_items 字段可用（参考 x1ao4）
+    if isinstance(data.get("list"), list):
+        for file_item in data["list"]:
+            if file_item.get("dir"):
+                include_items = file_item.get("include_items")
+                if include_items is None:
+                    file_item["include_items"] = 0
+                else:
+                    try:
+                        file_item["include_items"] = int(include_items)
+                    except (ValueError, TypeError):
+                        file_item["include_items"] = 0
+
+    data["total_size"] = calc_share_total_size(data.get("list"))
 
     # 过滤 01x.mp4 类型无效视频格式
     if os.getenv("FILTER_INVALID_VIDEO", "true") == "true":
