@@ -1118,7 +1118,7 @@ def _to_int_size(value):
 
 
 def calc_share_total_size(file_list):
-    """计算分享根目录文件总大小（含文件夹聚合大小）。"""
+    """计算分享根目录文件总大小（浅层，含文件夹聚合大小）。"""
     if not isinstance(file_list, list):
         return 0
     total = 0
@@ -1129,34 +1129,53 @@ def calc_share_total_size(file_list):
     return total
 
 
-def parse_size_from_content(content):
-    """从搜索结果描述中解析大小，如「大小:1.5GB」。"""
-    if not content:
+def calc_share_total_size_deep(account, pwd_id, stoken, file_list, depth=0, max_depth=4):
+    """递归统计分享目录总大小（支持单文件夹分享穿透）。"""
+    if not isinstance(file_list, list) or not file_list or depth > max_depth:
         return 0
-    match = re.search(r"大小\s*[:：]\s*(-|[^\s,，]+)", str(content), re.IGNORECASE)
-    if not match or match.group(1).strip() == "-":
+
+    # 常见场景：分享链接仅包含一个文件夹，进入其内部统计
+    if len(file_list) == 1 and file_list[0].get("dir") and depth == 0:
+        folder = file_list[0]
+        folder_size = _to_int_size(folder.get("size") or folder.get("file_size"))
+        if folder_size > 0:
+            return folder_size
+        folder_fid = folder.get("fid")
+        if folder_fid:
+            inner = account.get_detail(pwd_id, stoken, folder_fid)
+            if inner.get("code") == 0:
+                return calc_share_total_size_deep(
+                    account,
+                    pwd_id,
+                    stoken,
+                    inner.get("data", {}).get("list") or [],
+                    depth + 1,
+                    max_depth,
+                )
         return 0
-    text = match.group(1).strip().upper()
-    unit_map = {
-        "B": 1,
-        "K": 1024,
-        "KB": 1024,
-        "M": 1024**2,
-        "MB": 1024**2,
-        "G": 1024**3,
-        "GB": 1024**3,
-        "T": 1024**4,
-        "TB": 1024**4,
-    }
-    m = re.match(r"^([\d.]+)\s*([A-Z]+)?$", text)
-    if not m:
-        return 0
-    num = float(m.group(1))
-    unit = m.group(2) or "B"
-    multiplier = unit_map.get(unit)
-    if not multiplier:
-        return 0
-    return int(num * multiplier)
+
+    total = 0
+    for item in file_list:
+        if not isinstance(item, dict):
+            continue
+        size = _to_int_size(item.get("size") or item.get("file_size"))
+        if item.get("dir"):
+            if size > 0:
+                total += size
+            elif depth < max_depth and item.get("fid"):
+                inner = account.get_detail(pwd_id, stoken, item["fid"])
+                if inner.get("code") == 0:
+                    total += calc_share_total_size_deep(
+                        account,
+                        pwd_id,
+                        stoken,
+                        inner.get("data", {}).get("list") or [],
+                        depth + 1,
+                        max_depth,
+                    )
+        else:
+            total += size
+    return total
 
 
 def do_sign(account):
