@@ -292,15 +292,95 @@ def get_task_suggestions():
         return jsonify({"success": False, "message": "未登录"})
     query = request.args.get("q", "").lower()
     deep = request.args.get("d", "").lower()
+    try:
+        results = _collect_task_suggestions(query, deep)
+        return jsonify({"success": True, "data": results})
+    except Exception as e:
+        return jsonify({"success": True, "message": f"error: {str(e)}"})
+
+
+@app.route("/task_suggestions_stream")
+def get_task_suggestions_stream():
+    if not is_login():
+        return jsonify({"success": False, "message": "未登录"})
+    query = request.args.get("q", "").lower()
+    deep = request.args.get("d", "").lower()
+
+    def generate():
+        sources = _get_task_suggestion_sources(query, deep)
+        total = len(sources)
+        if total == 0:
+            yield _sse_event({"type": "done", "success": True, "data": []})
+            return
+
+        yield _sse_event(
+            {
+                "type": "start",
+                "total": total,
+                "sources": [name for name, _ in sources],
+            }
+        )
+
+        search_results = []
+        completed = 0
+        with ThreadPoolExecutor(max_workers=total) as executor:
+            future_map = {}
+            for name, search_fn in sources:
+                future_map[executor.submit(search_fn)] = name
+                yield _sse_event(
+                    {
+                        "type": "searching",
+                        "source": name,
+                        "completed": completed,
+                        "total": total,
+                    }
+                )
+
+            for future in as_completed(future_map):
+                name = future_map[future]
+                try:
+                    result = future.result() or []
+                except Exception as e:
+                    logging.warning(f"搜索源 [{name}] 失败: {e}")
+                    result = []
+                search_results.extend(result)
+                completed += 1
+                yield _sse_event(
+                    {
+                        "type": "progress",
+                        "source": name,
+                        "completed": completed,
+                        "total": total,
+                        "count": len(result),
+                        "found": len(search_results),
+                    }
+                )
+
+        results = _dedupe_task_suggestions(search_results)
+        yield _sse_event({"type": "done", "success": True, "data": results})
+
+    return Response(
+        stream_with_context(generate()),
+        content_type="text/event-stream;charset=utf-8",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+def _sse_event(payload):
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _get_task_suggestion_sources(query, deep):
     net_data = config_data.get("source", {}).get("net", {})
     cs_data = config_data.get("source", {}).get("cloudsaver", {})
     ps_data = config_data.get("source", {}).get("pansou", {})
+    sources = []
 
     def net_search():
         if str(net_data.get("enable", "true")).lower() != "false":
             base_url = base64.b64decode("aHR0cHM6Ly9zLjkxNzc4OC54eXo=").decode()
             url = f"{base_url}/task_suggestions?q={query}&d={deep}"
-            response = requests.get(url)
+            response = requests.get(url, timeout=30)
             return response.json()
         return []
 
@@ -324,8 +404,7 @@ def get_task_suggestions():
                         "cloudsaver", {}
                     )["token"] = search.get("new_token")
                     Config.write_json(CONFIG_PATH, config_data)
-                search_results = cs.clean_search_results(search.get("data"))
-                return search_results
+                return cs.clean_search_results(search.get("data"))
         return []
 
     def ps_search():
@@ -334,30 +413,38 @@ def get_task_suggestions():
             return ps.search(query, deep == "1")
         return []
 
-    try:
-        search_results = []
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            features = []
-            features.append(executor.submit(net_search))
-            features.append(executor.submit(cs_search))
-            features.append(executor.submit(ps_search))
-            for future in as_completed(features):
-                result = future.result()
-                search_results.extend(result)
+    if str(net_data.get("enable", "true")).lower() != "false":
+        sources.append(("网络搜索", net_search))
+    if cs_data.get("server") and cs_data.get("username") and cs_data.get("password"):
+        sources.append(("CloudSaver", cs_search))
+    if ps_data.get("server"):
+        sources.append(("PanSou", ps_search))
+    return sources
 
-        # 按时间排序并去重
-        results = []
-        link_array = []
-        search_results.sort(key=lambda x: x.get("datetime", ""), reverse=True)
-        for item in search_results:
-            url = item.get("shareurl", "")
-            if url != "" and url not in link_array:
-                link_array.append(url)
-                results.append(item)
 
-        return jsonify({"success": True, "data": results})
-    except Exception as e:
-        return jsonify({"success": True, "message": f"error: {str(e)}"})
+def _dedupe_task_suggestions(search_results):
+    results = []
+    link_array = []
+    search_results.sort(key=lambda x: x.get("datetime", ""), reverse=True)
+    for item in search_results:
+        url = item.get("shareurl", "")
+        if url != "" and url not in link_array:
+            link_array.append(url)
+            results.append(item)
+    return results
+
+
+def _collect_task_suggestions(query, deep):
+    search_results = []
+    sources = _get_task_suggestion_sources(query, deep)
+    if not sources:
+        return []
+    with ThreadPoolExecutor(max_workers=len(sources)) as executor:
+        futures = [executor.submit(search_fn) for _, search_fn in sources]
+        for future in as_completed(futures):
+            result = future.result() or []
+            search_results.extend(result)
+    return _dedupe_task_suggestions(search_results)
 
 
 @app.route("/get_share_detail", methods=["POST"])

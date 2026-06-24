@@ -341,9 +341,11 @@
                               <span v-if="smart_param.isVerifying">
                                 正在验证链接 {{ smart_param.validateProgress.current }}/{{ smart_param.validateProgress.total }}<span v-if="smart_param.validateProgress.valid > 0">，有效 {{ smart_param.validateProgress.valid }}</span>
                               </span>
-                              <span v-else>正在搜索资源...</span>
-                              <div v-if="smart_param.isVerifying && smart_param.validateProgress.total > 0" class="progress mt-1" style="height: 4px;">
-                                <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" :style="{ width: searchValidatePercent + '%' }"></div>
+                              <span v-else>
+                                正在搜索 {{ smart_param.searchProgress.source || '资源' }}<span v-if="smart_param.searchProgress.total > 0">（{{ smart_param.searchProgress.completed }}/{{ smart_param.searchProgress.total }}）</span><span v-if="smart_param.searchProgress.found > 0">，已找到 {{ smart_param.searchProgress.found }} 条</span>
+                              </span>
+                              <div v-if="searchPhasePercent > 0" class="progress mt-1" style="height: 4px;">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" :style="{ width: searchPhasePercent + '%' }"></div>
                               </div>
                             </template>
                             <span v-else>{{ searchStatusMessage }}</span>
@@ -691,6 +693,13 @@
           isSearching: false,
           isVerifying: false,
           searchSessionId: 0,
+          searchEventSource: null,
+          searchProgress: {
+            total: 0,
+            completed: 0,
+            source: '',
+            found: 0,
+          },
           validateProgress: {
             total: 0,
             current: 0,
@@ -748,6 +757,14 @@
           const progress = this.smart_param.validateProgress || {};
           if (!progress.total) return 0;
           return Math.min(100, Math.round((progress.current / progress.total) * 100));
+        },
+        searchPhasePercent() {
+          if (this.smart_param.isVerifying) {
+            return this.searchValidatePercent;
+          }
+          const progress = this.smart_param.searchProgress || {};
+          if (!progress.total) return 0;
+          return Math.min(100, Math.round((progress.completed / progress.total) * 100));
         },
         searchStatusMessage() {
           if (this.smart_param.isSearching || this.smart_param.isVerifying) {
@@ -1119,17 +1136,51 @@
             task.runweek = [1, 2, 3, 4, 5, 6, 7];
           }
         },
+        closeSearchEventSource() {
+          if (this.smart_param.searchEventSource) {
+            this.smart_param.searchEventSource.close();
+            this.smart_param.searchEventSource = null;
+          }
+        },
+        handleSearchSuggestionsResponse(responseData, sessionId) {
+          if (sessionId !== this.smart_param.searchSessionId) return;
+          this.smart_param.taskSuggestions = responseData;
+          const data = responseData.data;
+          if (data && data.length > 0) {
+            this.verifyShareLinks(data, sessionId);
+          } else {
+            this.smart_param.isSearching = false;
+          }
+        },
+        fetchTaskSuggestionsFallback(taskname, deep, sessionId) {
+          axios.get('/task_suggestions', {
+            params: { q: taskname, d: deep }
+          }).then(response => {
+            this.handleSearchSuggestionsResponse(response.data, sessionId);
+          }).catch(error => {
+            if (sessionId !== this.smart_param.searchSessionId) return;
+            console.error('Error fetching suggestions:', error);
+            this.smart_param.isSearching = false;
+          });
+        },
         searchSuggestions(index, taskname, deep = 1) {
           taskname = taskname.replace(/\((19|20)\d{2}\)/g, '').trim();
           if (taskname.length < 2) {
             console.log(`任务名[${taskname}]过短${taskname.length} 不进行搜索`);
             return;
           }
+          this.closeSearchEventSource();
           this.smart_param.searchSessionId += 1;
           const sessionId = this.smart_param.searchSessionId;
           this.smart_param.isSearching = true;
           this.smart_param.isVerifying = false;
           this.smart_param.validateProgress = { total: 0, current: 0, valid: 0 };
+          this.$set(this.smart_param, 'searchProgress', {
+            total: 0,
+            completed: 0,
+            source: '',
+            found: 0,
+          });
           this.smart_param.taskSuggestions = {};
           this.smart_param.index = index;
           this.smart_param.showSuggestions = true;
@@ -1139,32 +1190,49 @@
               $(`#collapse_${index}`).collapse('show');
             }
           });
-          try {
-            axios.get('/task_suggestions', {
-              params: {
-                q: taskname,
-                d: deep
-              }
-            }).then(response => {
-              if (sessionId !== this.smart_param.searchSessionId) return;
-              this.smart_param.taskSuggestions = response.data;
-              const data = response.data.data;
-              if (data && data.length > 0) {
-                this.verifyShareLinks(data, sessionId);
-              } else {
-                this.smart_param.isSearching = false;
-              }
-            }).catch(error => {
-              if (sessionId !== this.smart_param.searchSessionId) return;
-              console.error('Error fetching suggestions:', error);
-              this.smart_param.isSearching = false;
-            });
-          } catch (e) {
-            this.smart_param.taskSuggestions = {
-              error: "网络异常"
-            };
-            this.smart_param.isSearching = false;
+          if (typeof EventSource === 'undefined') {
+            this.fetchTaskSuggestionsFallback(taskname, deep, sessionId);
+            return;
           }
+          const streamUrl = `/task_suggestions_stream?q=${encodeURIComponent(taskname)}&d=${deep}`;
+          const eventSource = new EventSource(streamUrl);
+          this.smart_param.searchEventSource = eventSource;
+          eventSource.onmessage = (event) => {
+            if (sessionId !== this.smart_param.searchSessionId) {
+              eventSource.close();
+              return;
+            }
+            let msg;
+            try {
+              msg = JSON.parse(event.data);
+            } catch (e) {
+              return;
+            }
+            if (msg.type === 'start') {
+              this.$set(this.smart_param, 'searchProgress', {
+                total: msg.total || 0,
+                completed: 0,
+                source: (msg.sources && msg.sources[0]) || '',
+                found: 0,
+              });
+            } else if (msg.type === 'searching') {
+              this.$set(this.smart_param.searchProgress, 'source', msg.source || '');
+            } else if (msg.type === 'progress') {
+              this.$set(this.smart_param.searchProgress, 'completed', msg.completed || 0);
+              this.$set(this.smart_param.searchProgress, 'found', msg.found || 0);
+              this.$set(this.smart_param.searchProgress, 'source', msg.source || '');
+            } else if (msg.type === 'done') {
+              eventSource.close();
+              this.smart_param.searchEventSource = null;
+              this.handleSearchSuggestionsResponse(msg, sessionId);
+            }
+          };
+          eventSource.onerror = () => {
+            eventSource.close();
+            this.smart_param.searchEventSource = null;
+            if (sessionId !== this.smart_param.searchSessionId) return;
+            this.fetchTaskSuggestionsFallback(taskname, deep, sessionId);
+          };
         },
         finishSearchProgress(sessionId) {
           if (sessionId !== this.smart_param.searchSessionId) return;
