@@ -339,11 +339,9 @@
                             <template v-if="smart_param.isSearching || smart_param.isVerifying">
                               <i class="spinner-border spinner-border-sm" role="status"></i>
                               <span v-if="smart_param.isVerifying">
-                                正在验证链接 {{ smart_param.validateProgress.current }}/{{ smart_param.validateProgress.total }}<span v-if="smart_param.validateProgress.valid > 0">，有效 {{ smart_param.validateProgress.valid }}</span>
+                                正在验证链接 {{ smart_param.validateProgress.current }}/{{ smart_param.validateProgress.total }}（检查夸克分享有效性）<span v-if="smart_param.validateProgress.valid > 0">，有效 {{ smart_param.validateProgress.valid }}</span>
                               </span>
-                              <span v-else>
-                                正在搜索 {{ smart_param.searchProgress.source || '资源' }}<span v-if="smart_param.searchProgress.total > 0">（{{ smart_param.searchProgress.completed }}/{{ smart_param.searchProgress.total }}）</span><span v-if="smart_param.searchProgress.found > 0">，已找到 {{ smart_param.searchProgress.found }} 条</span>
-                              </span>
+                              <span v-else>{{ searchProgressText }}</span>
                               <div v-if="searchPhasePercent > 0" class="progress mt-1" style="height: 4px;">
                                 <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" :style="{ width: searchPhasePercent + '%' }"></div>
                               </div>
@@ -699,6 +697,9 @@
             completed: 0,
             source: '',
             found: 0,
+            sources: [],
+            completedSources: [],
+            pendingSources: [],
           },
           validateProgress: {
             total: 0,
@@ -765,6 +766,21 @@
           const progress = this.smart_param.searchProgress || {};
           if (!progress.total) return 0;
           return Math.min(100, Math.round((progress.completed / progress.total) * 100));
+        },
+        searchProgressText() {
+          const progress = this.smart_param.searchProgress || {};
+          if (!progress.total) {
+            return '正在搜索资源...';
+          }
+          const foundText = progress.found > 0 ? `，已找到 ${progress.found} 条` : '';
+          const phaseText = `（${progress.completed}/${progress.total}）`;
+          if (progress.pendingSources && progress.pendingSources.length) {
+            const doneText = progress.completedSources && progress.completedSources.length
+              ? `${progress.completedSources.join('、')} 已完成，`
+              : '';
+            return `正在等待 ${progress.pendingSources.join('、')} 返回结果${phaseText}${foundText}`;
+          }
+          return `正在搜索 ${progress.source || '资源'}${phaseText}${foundText}`;
         },
         searchStatusMessage() {
           if (this.smart_param.isSearching || this.smart_param.isVerifying) {
@@ -1180,6 +1196,9 @@
             completed: 0,
             source: '',
             found: 0,
+            sources: [],
+            completedSources: [],
+            pendingSources: [],
           });
           this.smart_param.taskSuggestions = {};
           this.smart_param.index = index;
@@ -1214,13 +1233,20 @@
                 completed: 0,
                 source: (msg.sources && msg.sources[0]) || '',
                 found: 0,
+                sources: msg.sources || [],
+                completedSources: [],
+                pendingSources: msg.sources || [],
               });
             } else if (msg.type === 'searching') {
               this.$set(this.smart_param.searchProgress, 'source', msg.source || '');
+              this.$set(this.smart_param.searchProgress, 'pendingSources', msg.pending_sources || []);
+              this.$set(this.smart_param.searchProgress, 'completedSources', msg.completed_sources || []);
             } else if (msg.type === 'progress') {
               this.$set(this.smart_param.searchProgress, 'completed', msg.completed || 0);
               this.$set(this.smart_param.searchProgress, 'found', msg.found || 0);
               this.$set(this.smart_param.searchProgress, 'source', msg.source || '');
+              this.$set(this.smart_param.searchProgress, 'pendingSources', msg.pending_sources || []);
+              this.$set(this.smart_param.searchProgress, 'completedSources', msg.completed_sources || []);
             } else if (msg.type === 'done') {
               eventSource.close();
               this.smart_param.searchEventSource = null;
@@ -1266,7 +1292,7 @@
               next();
               return;
             }
-            axios.post('/get_share_detail', { shareurl: item.shareurl })
+            axios.post('/get_share_detail', { shareurl: item.shareurl, validate_only: true })
               .then(res => {
                 if (sessionId !== this.smart_param.searchSessionId) return;
                 const isValid = res.data.success;
