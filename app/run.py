@@ -107,6 +107,34 @@ def gen_md5(string):
     return md5.hexdigest()
 
 
+def merge_tasklist(disk_tasklist, client_tasklist):
+    """合并任务列表，避免未加载完整配置时覆盖已有任务。"""
+    if client_tasklist is None:
+        return disk_tasklist
+    if not disk_tasklist:
+        return client_tasklist
+    if len(client_tasklist) >= len(disk_tasklist):
+        return client_tasklist
+
+    disk_names = {t.get("taskname") for t in disk_tasklist}
+    client_names = {t.get("taskname") for t in client_tasklist}
+    if not client_names:
+        return client_tasklist
+    if client_names.isdisjoint(disk_names):
+        logging.warning(">>> 检测到任务列表疑似未包含已有任务，已自动合并而非覆盖")
+        return disk_tasklist + client_tasklist
+    return client_tasklist
+
+
+def reload_config_data():
+    """从磁盘重新加载配置，并保留内存中的 WebUI 账号信息。"""
+    global config_data
+    disk_data = Config.read_json(CONFIG_PATH)
+    disk_data["webui"] = config_data.get("webui") or disk_data.get("webui", {})
+    config_data = disk_data
+    return config_data
+
+
 def get_login_token():
     username = config_data["webui"]["username"]
     password = config_data["webui"]["password"]
@@ -189,11 +217,14 @@ def update():
     global config_data
     if not is_login():
         return jsonify({"success": False, "message": "未登录"})
+    reload_config_data()
     # 使用允许列表防止批量赋值攻击
     allowed_keys = ["cookie", "crontab", "push_config", "tasklist",
                     "magic_regex", "plugins", "source"]
     for key, value in request.json.items():
         if key in allowed_keys:
+            if key == "tasklist":
+                value = merge_tasklist(config_data.get("tasklist", []), value)
             config_data.update({key: value})
     Config.write_json(CONFIG_PATH, config_data)
     # 重新加载任务
@@ -288,7 +319,10 @@ def get_task_suggestions():
             search = cs.auto_login_search(query)
             if search.get("success"):
                 if search.get("new_token"):
-                    cs_data["token"] = search.get("new_token")
+                    reload_config_data()
+                    config_data.setdefault("source", {}).setdefault(
+                        "cloudsaver", {}
+                    )["token"] = search.get("new_token")
                     Config.write_json(CONFIG_PATH, config_data)
                 search_results = cs.clean_search_results(search.get("data"))
                 return search_results
@@ -534,8 +568,9 @@ def add_task():
             )
     if not request_data.get("addition"):
         request_data["addition"] = task_plugins_config_default
-    # 添加任务
-    config_data["tasklist"].append(request_data)
+    # 先从磁盘加载最新任务列表，避免内存中的过期数据覆盖已有任务
+    reload_config_data()
+    config_data.setdefault("tasklist", []).append(request_data)
     Config.write_json(CONFIG_PATH, config_data)
     logging.info(f">>> 通过API添加任务: {request_data['taskname']}")
     return jsonify(
