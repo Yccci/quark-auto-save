@@ -31,7 +31,7 @@ import re
 
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, parent_dir)
-from quark_auto_save import Quark, Config, MagicRename, calc_share_total_size
+from quark_auto_save import Quark, Config, MagicRename, calc_share_total_size_deep
 
 print(
     r"""
@@ -405,7 +405,9 @@ def get_share_detail():
                     except (ValueError, TypeError):
                         file_item["include_items"] = 0
 
-    data["total_size"] = calc_share_total_size(data.get("list"))
+    data["total_size"] = calc_share_total_size_deep(
+        account, pwd_id, stoken, data.get("list")
+    )
 
     # 过滤 01x.mp4 类型无效视频格式
     if os.getenv("FILTER_INVALID_VIDEO", "true") == "true":

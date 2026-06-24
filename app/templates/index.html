@@ -1151,7 +1151,8 @@
                   const shareData = res.data.data || {};
                   const totalSize = shareData.total_size
                     || this.calcShareTotalSize(shareData)
-                    || this.parseSizeFromContent(item.content);
+                    || item.size_hint
+                    || this.parseSizeFromTexts(item.taskname, item.content);
                   this.$set(item, 'total_size', totalSize);
                 }
               }).catch(() => {
@@ -1179,12 +1180,25 @@
             return sum + size;
           }, 0);
         },
+        parseSizeFromTexts(...texts) {
+          for (const text of texts) {
+            const size = this.parseSizeFromContent(text);
+            if (size > 0) return size;
+          }
+          return 0;
+        },
         parseSizeFromContent(content) {
           if (!content) return 0;
           const normalized = String(content).replace(/：/g, ':').replace(/，/g, ',');
-          const match = normalized.match(/大小\s*:\s*(-|[^\s,]+)/i);
-          if (!match || match[1].trim() === '-') return 0;
-          const text = match[1].trim().toUpperCase();
+          let match = normalized.match(/大小\s*:\s*(-|[^\s,]+)/i);
+          let text = '';
+          if (match && match[1].trim() !== '-') {
+            text = match[1].trim().toUpperCase();
+          } else {
+            match = normalized.match(/(\d+(?:\.\d+)?)\s*(TB|GB|MB|KB|G|M|K|T)\b/i);
+            if (!match) return 0;
+            text = `${match[1]}${match[2].toUpperCase()}`;
+          }
           const unitMap = { B: 1, K: 1024, KB: 1024, M: 1048576, MB: 1048576, G: 1073741824, GB: 1073741824, T: 1099511627776, TB: 1099511627776 };
           const m = text.match(/^([\d.]+)\s*([A-Z]+)?$/);
           if (!m) return 0;

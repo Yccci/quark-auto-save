@@ -1,6 +1,6 @@
 import re
 import requests
-from sdk.common import iso_to_cst
+from sdk.common import iso_to_cst, parse_size_from_texts
 
 
 class CloudSaver:
@@ -125,6 +125,9 @@ class CloudSaver:
                         content = content.replace('<mark class="highlight">', "")
                         content = content.replace("</mark>", "")
                         content = content.strip()
+                        size_hint = parse_size_from_texts(
+                            item.get("content", ""), title, item.get("title", "")
+                        )
                         # 统一发布时间格式
                         pubdate = item.get("pubDate", "")
                         if pubdate:
@@ -140,7 +143,8 @@ class CloudSaver:
                                     "datetime": pubdate,
                                     "tags": item.get("tags", []),
                                     "channel": item.get("channelId", ""),
-                                    "source": "CloudSaver"
+                                    "source": "CloudSaver",
+                                    "size_hint": size_hint,
                                 }
                             )
         return clean_results
