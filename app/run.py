@@ -393,18 +393,6 @@ def _sse_event(payload):
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
-def _is_source_enabled(source_data, default=True):
-    """判断搜索源是否启用，未配置时沿用默认值。"""
-    if not isinstance(source_data, dict):
-        return default
-    enable = source_data.get("enable")
-    if enable is None or enable == "":
-        return default
-    if isinstance(enable, bool):
-        return enable
-    return str(enable).lower() not in ("false", "0", "no", "off")
-
-
 def _get_task_suggestion_sources(query, deep):
     net_data = config_data.get("source", {}).get("net", {})
     cs_data = config_data.get("source", {}).get("cloudsaver", {})
@@ -448,16 +436,11 @@ def _get_task_suggestion_sources(query, deep):
             return ps.search(query, deep == "1", timeout=45)
         return []
 
-    if _is_source_enabled(net_data):
+    if str(net_data.get("enable", "true")).lower() != "false":
         sources.append(("网络搜索", net_search))
-    if (
-        _is_source_enabled(cs_data)
-        and cs_data.get("server")
-        and cs_data.get("username")
-        and cs_data.get("password")
-    ):
+    if cs_data.get("server") and cs_data.get("username") and cs_data.get("password"):
         sources.append(("CloudSaver", cs_search))
-    if _is_source_enabled(ps_data) and ps_data.get("server"):
+    if ps_data.get("server"):
         sources.append(("PanSou", ps_search))
     return sources
 
