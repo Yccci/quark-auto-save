@@ -31,7 +31,13 @@ import re
 
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, parent_dir)
-from quark_auto_save import Quark, Config, MagicRename, calc_share_total_size_deep
+from quark_auto_save import (
+    Quark,
+    Config,
+    MagicRename,
+    calc_share_total_size,
+    calc_share_total_size_deep,
+)
 
 print(
     r"""
@@ -323,16 +329,25 @@ def get_task_suggestions_stream():
 
         search_results = []
         completed = 0
+        completed_sources = []
+        all_source_names = [name for name, _ in sources]
         with ThreadPoolExecutor(max_workers=total) as executor:
             future_map = {}
             for name, search_fn in sources:
                 future_map[executor.submit(search_fn)] = name
+                pending_sources = [
+                    source_name
+                    for source_name in all_source_names
+                    if source_name not in completed_sources
+                ]
                 yield _sse_event(
                     {
                         "type": "searching",
                         "source": name,
                         "completed": completed,
                         "total": total,
+                        "pending_sources": pending_sources,
+                        "completed_sources": list(completed_sources),
                     }
                 )
 
@@ -345,6 +360,12 @@ def get_task_suggestions_stream():
                     result = []
                 search_results.extend(result)
                 completed += 1
+                completed_sources.append(name)
+                pending_sources = [
+                    source_name
+                    for source_name in all_source_names
+                    if source_name not in completed_sources
+                ]
                 yield _sse_event(
                     {
                         "type": "progress",
@@ -353,6 +374,8 @@ def get_task_suggestions_stream():
                         "total": total,
                         "count": len(result),
                         "found": len(search_results),
+                        "pending_sources": pending_sources,
+                        "completed_sources": list(completed_sources),
                     }
                 )
 
@@ -410,7 +433,7 @@ def _get_task_suggestion_sources(query, deep):
     def ps_search():
         if ps_data.get("server"):
             ps = PanSou(ps_data.get("server"))
-            return ps.search(query, deep == "1")
+            return ps.search(query, deep == "1", timeout=45)
         return []
 
     if str(net_data.get("enable", "true")).lower() != "false":
@@ -492,9 +515,12 @@ def get_share_detail():
                     except (ValueError, TypeError):
                         file_item["include_items"] = 0
 
-    data["total_size"] = calc_share_total_size_deep(
-        account, pwd_id, stoken, data.get("list")
-    )
+    if request.json.get("validate_only"):
+        data["total_size"] = calc_share_total_size(data.get("list"))
+    else:
+        data["total_size"] = calc_share_total_size_deep(
+            account, pwd_id, stoken, data.get("list")
+        )
 
     # 过滤 01x.mp4 类型无效视频格式
     if os.getenv("FILTER_INVALID_VIDEO", "true") == "true":
